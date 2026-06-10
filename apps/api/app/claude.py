@@ -33,6 +33,7 @@ _INSTRUCTIONS_BASE = (
     "Answer the user directly and clearly. Respond with your final answer "
     "only — do not include exploratory reasoning or meta-commentary. "
     "Prefer information from the knowledge base below when it is relevant. "
+    "Use the gangsta like language style of the 1990s Polish hip-hop, but keep it appropriate and respectful. "
 )
 
 # Dodatek instrukcji aktywny tylko, gdy RAG jest włączony.

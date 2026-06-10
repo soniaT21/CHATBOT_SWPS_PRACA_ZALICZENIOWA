@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "bash dev.sh",
-    "build": "bash build.sh"
+    "dev": "node dev.mjs",
+    "build": "node build.mjs"
   }
 }

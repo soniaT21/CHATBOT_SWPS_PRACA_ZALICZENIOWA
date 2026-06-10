@@ -102,7 +102,7 @@ Zainstaluj sobie to:
 |---|---|---|---|
 | **Git** | dowolna | pobranie kodu (fork + clone) | `git --version` |
 | **Node.js** | 18+ | uruchamia frontend i narzędzia | `node --version` |
-| **Python** | 3.9+ | uruchamia backend | `python3 --version` |
+| **Python** | 3.9+ | uruchamia backend | `python3 --version` (Windows: `python --version` lub `py --version`) |
 | **Yarn (Corepack)** | Yarn 4 | menedżer paczek | `corepack enable` (raz) |
 | **Klucz API Anthropic** | — | dostęp do Claude | weź na [console.anthropic.com](https://console.anthropic.com) |
 
@@ -179,7 +179,7 @@ yarn build               # wersja produkcyjna
 Chcesz sprawdzić backend bez przeglądarki?
 
 ```bash
-curl -X POST http://localhost:5000/chat \
+curl -X POST http://localhost:5001/chat \
   -H 'Content-Type: application/json' \
   -d '{"message":"Cześć, kim jesteś?"}'
 ```
@@ -200,7 +200,7 @@ Całość to **monorepo** (jedno repo z kilkoma aplikacjami) ogarniane przez
                             │  POST /chat { message, history }   (fetch)
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  BACKEND — Flask (Python)                      http://localhost:5000
+│  BACKEND — Flask (Python)                      http://localhost:5001
 │  routes/chat.py  →  claude.py                                     │
 │   • prompt + knowledge/general.md                                 │
 │   • pętla „tool use" (bot sam decyduje, czy szukać)              │
@@ -323,7 +323,7 @@ CHATBOT_SWPS/
 │   │   ├── knowledge/
 │   │   │   └── general.md         # główna wiedza (zawsze w kontekście)
 │   │   ├── requirements.txt       # paczki Pythona
-│   │   ├── dev.sh / build.sh       # skrypty (zakładają venv, odpalają Flask)
+│   │   ├── dev.mjs / build.mjs     # skrypty Node (venv + Flask, wieloplatformowe)
 │   │   ├── .env.example            # wzór konfiguracji (skopiuj do .env)
 │   │   └── README.md               # szczegóły backendu
 │   └── docs/                      # druga, przykładowa apka Next.js (opcjonalna)
@@ -387,7 +387,7 @@ wyszukiwanie) i „ogólne" (nie powinno). Zobacz, czy odpowiedzi mają źródł
 | Błąd o `ANTHROPIC_API_KEY` | Brak klucza. Skopiuj `apps/api/.env.example` do `apps/api/.env` i wklej klucz. |
 | `Address already in use` (port 3000/5000) | Port zajęty. Zamknij to, co go trzyma, albo zmień port. |
 | Wyszukiwanie repozytorium zwraca błąd 403 | Cloudflare blokuje zapytania bez nagłówka przeglądarki — w projekcie jest to już ogarnięte w `repository.py`. |
-| `yarn dev` nie widzi Pythona | Zainstaluj Python 3.9+ i sprawdź, że `python3` działa w terminalu. |
+| `yarn dev` nie widzi Pythona | Zainstaluj Python 3.9+ i sprawdź, że `python3` działa w terminalu (na Windows: `python` lub `py`). |
 | Pierwsze odpalenie backendu trwa wieki | Spokojnie — zakłada się `.venv` i instalują paczki. Kolejne starty są szybkie. |
 | Dziwny błąd o „workspace root"/Turbopack | Projekt używa linkera `node-modules` (plik `.yarnrc.yml`). Odpal `yarn install` jeszcze raz. |
 

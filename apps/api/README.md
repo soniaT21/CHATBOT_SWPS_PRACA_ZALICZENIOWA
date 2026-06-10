@@ -1,7 +1,7 @@
 # api — backend Flask (Python)
 
 Backend chatbota w monorepo `CHATBOT_SWPS`. Udostępnia REST API na **porcie
-5000**, z którego korzysta aplikacja frontendowa `web` (Next.js). Odpowiada za
+5001**, z którego korzysta aplikacja frontendowa `web` (Next.js). Odpowiada za
 rozmowę z modelem **Claude** (Anthropic) oraz za wyszukiwanie wiedzy „na
 żądanie" w **Repozytorium naukowym SWPS** (DSpace) — czyli za wzorzec **RAG**.
 
@@ -13,23 +13,29 @@ rozmowę z modelem **Claude** (Anthropic) oraz za wyszukiwanie wiedzy „na
 
 ## Spis treści
 
-1. [Wymagania](#wymagania)
-2. [Uruchamianie](#uruchamianie)
-3. [Konfiguracja (zmienne środowiskowe)](#konfiguracja-zmienne-środowiskowe)
-4. [Endpointy API](#endpointy-api)
-5. [Obsługa błędów](#obsługa-błędów)
-6. [Jak działa RAG / tool use](#jak-działa-rag--tool-use)
-7. [Baza wiedzy](#baza-wiedzy)
-8. [Struktura katalogów](#struktura-katalogów)
-9. [Zależności](#zależności)
-10. [Wdrożenie produkcyjne](#wdrożenie-produkcyjne)
-11. [Najczęstsze problemy](#najczęstsze-problemy)
+- [api — backend Flask (Python)](#api--backend-flask-python)
+  - [Spis treści](#spis-treści)
+  - [Wymagania](#wymagania)
+  - [Uruchamianie](#uruchamianie)
+    - [Przez Turborepo (zalecane)](#przez-turborepo-zalecane)
+    - [Bezpośrednio (bez Turbo)](#bezpośrednio-bez-turbo)
+  - [Konfiguracja (zmienne środowiskowe)](#konfiguracja-zmienne-środowiskowe)
+  - [Endpointy API](#endpointy-api)
+    - [`POST /chat`](#post-chat)
+  - [Obsługa błędów](#obsługa-błędów)
+  - [Jak działa RAG / tool use](#jak-działa-rag--tool-use)
+  - [Baza wiedzy](#baza-wiedzy)
+  - [Struktura katalogów](#struktura-katalogów)
+  - [Zależności](#zależności)
+  - [Wdrożenie produkcyjne](#wdrożenie-produkcyjne)
+  - [Najczęstsze problemy](#najczęstsze-problemy)
 
 ---
 
 ## Wymagania
 
-- **Python 3.9+** dostępny w `PATH` (sprawdź: `python3 --version`).
+- **Python 3.9+** dostępny w `PATH` (sprawdź: `python3 --version`; na Windows
+  `python --version` lub `py --version`).
 - **Klucz API Anthropic** (`ANTHROPIC_API_KEY`) — zdobądź na
   [console.anthropic.com](https://console.anthropic.com).
 - Do wyszukiwania w repozytorium SWPS **nie jest** potrzebny żaden klucz ani
@@ -48,10 +54,12 @@ yarn dev --filter=api    # tylko backend
 yarn dev                 # backend + frontend razem
 ```
 
-Skrypty `dev`/`build` (zob. [dev.sh](dev.sh) / [build.sh](build.sh)) **same**
+Skrypty `dev`/`build` (zob. [dev.mjs](dev.mjs) / [build.mjs](build.mjs)) **same**
 tworzą lokalne wirtualne środowisko Pythona (`.venv`), instalują zależności z
 [requirements.txt](requirements.txt) i uruchamiają serwer deweloperski Flask.
-Pierwsze uruchomienie trwa dłużej (instalacja paczek), kolejne są szybkie.
+Pierwsze uruchomienie trwa dłużej (instalacja paczek), kolejne są szybkie. Są to
+skrypty Node (uruchamiane przez `node`), więc działają na Windows, macOS i Linux
+bez potrzeby `bash`.
 
 ### Bezpośrednio (bez Turbo)
 
@@ -61,8 +69,22 @@ Przydatne przy pracy nad samym backendem:
 cd apps/api
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/flask --app app run --port 5000 --debug
+./.venv/bin/flask --app app run --port 5001 --debug
 ```
+
+Na Windows (`cmd`/PowerShell) użyj `python` zamiast `python3` oraz katalogu
+`Scripts` zamiast `bin`:
+
+```powershell
+cd apps/api
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m flask --app app run --port 5001 --debug
+```
+
+> Najprościej jednak uruchamiać `yarn dev` / `yarn build` — skrypty
+> [dev.mjs](dev.mjs) / [build.mjs](build.mjs) robią to wszystko automatycznie
+> i wieloplatformowo.
 
 ---
 
@@ -120,12 +142,12 @@ wiadomość musi pochodzić od użytkownika), a nową `message` dokleja na końc
 
 ```bash
 # Proste pytanie
-curl -X POST http://localhost:5000/chat \
+curl -X POST http://localhost:5001/chat \
   -H 'Content-Type: application/json' \
   -d '{"message":"Cześć, kim jesteś?"}'
 
 # Z historią rozmowy (kontekst wielowątkowy)
-curl -X POST http://localhost:5000/chat \
+curl -X POST http://localhost:5001/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "message": "A co z psychologią pracy?",
@@ -213,7 +235,8 @@ apps/api/
 │   └── general.md       # główna wiedza (zawsze w kontekście)
 ├── wsgi.py              # punkt wejścia produkcyjnego (gunicorn wsgi:app)
 ├── requirements.txt     # zależności Pythona
-├── dev.sh / build.sh    # skrypty: tworzą .venv i uruchamiają/instalują
+├── dev.mjs / build.mjs  # skrypty Node: tworzą .venv i uruchamiają/instalują
+├── scripts/venv.mjs     # wspólna logika provisioningu .venv (wieloplatformowa)
 ├── .env.example         # wzór konfiguracji (skopiuj do .env)
 └── package.json         # podłączenie do workspace Yarn/Turbo
 ```
@@ -243,7 +266,7 @@ np. `gunicorn`, z punktem wejścia [wsgi.py](wsgi.py):
 
 ```bash
 ./.venv/bin/pip install gunicorn
-./.venv/bin/gunicorn --bind 0.0.0.0:5000 wsgi:app
+./.venv/bin/gunicorn --bind 0.0.0.0:5001 wsgi:app
 ```
 
 Pamiętaj o ustawieniu zmiennych środowiskowych (`ANTHROPIC_API_KEY`,
@@ -257,7 +280,7 @@ docelowym, a nie w pliku `.env` w repozytorium.
 | Objaw | Rozwiązanie |
 |---|---|
 | Błąd o `ANTHROPIC_API_KEY` | Skopiuj `.env.example` do `.env` i wklej klucz. |
-| `Address already in use` (port 5000) | Port zajęty — zamknij inny proces lub zmień port (`--port`). |
+| `Address already in use` (port 5001) | Port zajęty — zamknij inny proces lub zmień port (`--port`). |
 | Wyszukiwanie repozytorium: błąd `403` | Cloudflare blokuje domyślny `User-Agent`; jest to obsłużone nagłówkiem przeglądarki w `repository.py`. |
 | Pierwsze uruchomienie długo trwa | Tworzony jest `.venv` i instalowane zależności — kolejne starty są szybkie. |
 | Błąd CORS w przeglądarce | Ustaw `CORS_ORIGIN` na adres frontendu (domyślnie `http://localhost:3000`). |
