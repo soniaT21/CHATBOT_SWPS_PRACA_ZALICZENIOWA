@@ -2,45 +2,42 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type Role = "user" | "bot";
+type Message = { role: "user" | "assistant"; content: string };
 
-interface Message {
-  role: Role;
-  text: string;
-}
+// Adres backendu. Można nadpisać w apps/web/.env.local (NEXT_PUBLIC_API_URL).
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5001";
+const POWITANIE: Message = {
+  role: "assistant",
+  content:
+    "Cześć! Jestem Asystentem SWPS. Zapytaj mnie np. o publikację SWPS " +
+    "o psychologii pozytywnej.",
+};
 
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([
-    { role: "bot", text: "Cześć! Zapytaj mnie o dorobek naukowy SWPS." },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([POWITANIE]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
 
+  // Automatyczne przewijanie na dół przy nowej wiadomości.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  async function sendMessage(e: React.FormEvent) {
-    e.preventDefault();
+  async function send() {
     const text = input.trim();
     if (!text || loading) return;
 
-    // Prior turns become conversation history (bot -> assistant for the API).
-    const history = messages.map((m) => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.text,
-    }));
+    // Historia BEZ powitania (indeks 0) i bez aktualnej wiadomości —
+    // tę wysyłamy osobno jako "message". Dzięki temu role poprawnie
+    // przeplatają się po stronie backendu.
+    const history = messages
+      .slice(1)
+      .map((m) => ({ role: m.role, content: m.content }));
 
-    setMessages((prev) => [...prev, { role: "user", text }]);
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
-    setError(null);
     setLoading(true);
 
     try {
@@ -49,96 +46,97 @@ export default function Chat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, history }),
       });
-
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error ?? `Żądanie nie powiodło się (${res.status})`);
-      }
-
-      setMessages((prev) => [...prev, { role: "bot", text: data.reply }]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Coś poszło nie tak");
+      const reply =
+        data.reply ||
+        data.error ||
+        "Przepraszam, coś poszło nie tak.";
+      setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Nie mogę połączyć się z serwerem. Sprawdź, czy backend działa " +
+            "(yarn dev) na " + API_URL + ".",
+        },
+      ]);
     } finally {
       setLoading(false);
     }
   }
 
-  return (
-    <div className="card shadow-sm" style={{ width: "100%", maxWidth: 640 }}>
-      <div className="card-header bg-primary text-white d-flex align-items-center gap-2">
-        <span
-          className="rounded-circle bg-success d-inline-block"
-          style={{ width: 10, height: 10 }}
-          aria-hidden
-        />
-        <strong>Chatbot</strong>
-      </div>
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter wysyła, Shift+Enter robi nową linię.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  }
 
+  return (
+    <div className="card shadow-sm">
+      {/* Okno z wiadomościami */}
       <div
-        ref={scrollRef}
-        className="card-body d-flex flex-column gap-2 overflow-auto"
-        style={{ height: 420 }}
+        className="card-body overflow-auto"
+        style={{ height: "60vh", minHeight: 320 }}
       >
         {messages.map((m, i) => (
           <div
             key={i}
-            className={`d-flex ${
+            className={`d-flex mb-3 ${
               m.role === "user" ? "justify-content-end" : "justify-content-start"
             }`}
           >
             <div
-              className={`px-3 py-2 rounded-3 ${
+              className={`chat-bubble px-3 py-2 rounded-3 ${
                 m.role === "user"
                   ? "bg-primary text-white"
-                  : "bg-light border text-dark"
+                  : "bg-light border"
               }`}
-              style={{ maxWidth: "75%", whiteSpace: "pre-wrap" }}
+              style={{ maxWidth: "80%" }}
             >
-              {m.text}
+              {m.content}
             </div>
           </div>
         ))}
 
         {loading && (
-          <div className="d-flex justify-content-start">
-            <div className="px-3 py-2 rounded-3 bg-light border text-muted">
-              <span
-                className="spinner-grow spinner-grow-sm me-1"
-                role="status"
-                aria-hidden
-              />
-              pisze…
+          <div className="d-flex mb-3 justify-content-start">
+            <div className="chat-bubble px-3 py-2 rounded-3 bg-light border">
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>
             </div>
           </div>
         )}
+
+        <div ref={endRef} />
       </div>
 
-      {error && (
-        <div className="alert alert-danger m-3 mb-0 py-2" role="alert">
-          {error}
-        </div>
-      )}
-
-      <form className="card-footer" onSubmit={sendMessage}>
+      {/* Pole wpisywania */}
+      <div className="card-footer bg-white">
         <div className="input-group">
-          <input
-            type="text"
+          <textarea
             className="form-control"
-            placeholder="Napisz wiadomość…"
+            rows={1}
+            placeholder="Napisz wiadomość..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
             disabled={loading}
-            aria-label="Wiadomość"
           />
           <button
-            type="submit"
             className="btn btn-primary"
+            type="button"
+            onClick={send}
             disabled={loading || !input.trim()}
           >
             Wyślij
           </button>
         </div>
-      </form>
+      </div>
     </div>
   );
 }

@@ -1,72 +1,90 @@
-"""Cienka warstwa pośrednia nad API Anthropic Claude dla endpointu czatu."""
+"""Rozmowa z modelem Claude.
 
+Tu mieszka "charakter" bota (_INSTRUCTIONS_BASE), opis narzędzia (_TOOLS)
+oraz logika rozmowy:
+
+* WERSJA PODSTAWOWA (ocena 4, RAG_ENABLED=false):
+  do promptu systemowego dołączamy całą bazę wiedzy z general.md
+  i bot odpowiada wyłącznie na jej podstawie. Bez wyszukiwania.
+
+* WERSJA ROZSZERZONA (ocena 5, RAG_ENABLED=true):
+  dodatkowo dajemy botowi narzędzie `szukaj_w_repozytorium`. Bot sam
+  decyduje, czy go użyć, a my w pętli wykonujemy wyszukiwanie i oddajemy
+  mu wynik (klasyczny "tool use").
+"""
 import os
 
-import anthropic
+from anthropic import Anthropic
 
-from app.knowledge import MAIN_KNOWLEDGE
-from app.repository import search_as_text
+from .knowledge import load_general_knowledge
+from .repository import search_as_text
 
-MODEL = "claude-opus-4-8"
-MAX_TOKENS = 2048
-# Zabezpieczenie przed nieskończoną pętlą wywołań narzędzia.
-MAX_TOOL_ITERS = 4
+# ----------------------------------------------------------------------------
+# Konfiguracja (z pliku .env)
+# ----------------------------------------------------------------------------
+MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-8")
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1024"))
+RAG_ENABLED = os.getenv("RAG_ENABLED", "false").strip().lower() == "true"
 
-
-def _env_flag(name: str, default: bool = True) -> bool:
-    """Czyta flagę typu prawda/fałsz ze zmiennej środowiskowej."""
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in ("1", "true", "yes", "on", "tak")
+_client = None
 
 
-# Włącznik RAG: gdy False, wyszukiwanie w repozytorium SWPS jest wyłączone —
-# narzędzie nie jest przekazywane modelowi, a prompt o nim nie wspomina.
-# Sterowane zmienną RAG_ENABLED w pliku .env (domyślnie włączone).
-RAG_ENABLED = _env_flag("RAG_ENABLED", True)
+def _get_client() -> Anthropic:
+    """Leniwie tworzy klienta Anthropic (dopiero przy pierwszym pytaniu)."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Brak ANTHROPIC_API_KEY. Skopiuj apps/api/.env.example do "
+                "apps/api/.env i wklej swój klucz API."
+            )
+        _client = Anthropic(api_key=api_key)
+    return _client
 
-# Część wspólna instrukcji (niezależna od RAG).
-_INSTRUCTIONS_BASE = (
-    "You are the CHATBOT SWPS assistant, a helpful and concise chatbot. "
-    "Always respond in Polish, regardless of the language the user writes in. "
-    "Answer the user directly and clearly. Respond with your final answer "
-    "only — do not include exploratory reasoning or meta-commentary. "
-    "Prefer information from the knowledge base below when it is relevant. "
-    "Use the gangsta like language style of the 1990s Polish hip-hop, but keep it appropriate and respectful. "
-)
 
-# Dodatek instrukcji aktywny tylko, gdy RAG jest włączony.
-_INSTRUCTIONS_RAG = (
-    "When the question concerns SWPS research, publications, authors or "
-    "academic topics, first call the `szukaj_w_repozytorium` tool to fetch "
-    "matching publications, then answer based on the results and cite the "
-    "source links. "
-)
+# ----------------------------------------------------------------------------
+# Charakter bota (prompt systemowy)
+# ----------------------------------------------------------------------------
+_INSTRUCTIONS_BASE = """\
+Jesteś Asystentem SWPS — pomocnym, rzeczowym chatbotem Uniwersytetu SWPS.
 
-_INSTRUCTIONS_TAIL = (
-    "If the answer is not available, answer from general knowledge and say so."
-)
+Twoje zasady:
+1. Odpowiadasz ZAWSZE po polsku, prostym i przyjaznym językiem.
+2. Opierasz się przede wszystkim na sekcji "Baza wiedzy" poniżej. To jest
+   Twoje główne źródło prawdy.
+3. Jeśli pytanie dotyczy publikacji albo badań SWPS, a w bazie wiedzy
+   znajdziesz pasującą pozycję — podaj jej tytuł, rok, autorów i link.
+4. Jeśli czegoś nie wiesz lub nie ma tego w bazie wiedzy, powiedz to wprost.
+   NIE zmyślaj tytułów, autorów ani linków.
+5. Odpowiadasz zwięźle i konkretnie. Bez lania wody.
+6. Gdy podajesz publikację, formatuj ją czytelnie: tytuł w cudzysłowie,
+   rok, autorzy/redakcja oraz link do źródła, jeśli jest dostępny.
 
-_INSTRUCTIONS = _INSTRUCTIONS_BASE + (_INSTRUCTIONS_RAG if RAG_ENABLED else "") + _INSTRUCTIONS_TAIL
+Jeśli masz dostępne narzędzie wyszukiwania w repozytorium, użyj go tylko
+wtedy, gdy pytanie dotyczy konkretnych publikacji/badań SWPS, których nie
+ma w bazie wiedzy. Do pytań ogólnych (np. "kim jesteś?") narzędzia nie używaj.\
+"""
 
-# Narzędzie udostępniane modelowi: wyszukiwanie w repozytorium SWPS na żądanie.
-# Stabilne między zapytaniami, więc nie psuje prompt cache.
+# Opis narzędzia dla modelu (używany TYLKO gdy RAG_ENABLED=true).
 _TOOLS = [
     {
         "name": "szukaj_w_repozytorium",
         "description": (
-            "Przeszukuje repozytorium naukowe SWPS (DSpace) i zwraca pasujące "
-            "publikacje: tytuł, autorów, rok, słowa kluczowe, abstrakt i link. "
-            "Wywołaj, gdy pytanie dotyczy publikacji, badań, autorów lub tematów "
-            "naukowych SWPS — zanim udzielisz odpowiedzi."
+            "Wyszukuje publikacje naukowe w repozytorium Uniwersytetu SWPS "
+            "(SHARE / DSpace). Używaj, gdy użytkownik pyta o konkretne "
+            "publikacje, artykuły, książki lub badania SWPS, a odpowiedzi nie "
+            "ma w bazie wiedzy. Zwraca tytuły, autorów, rok i linki."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "zapytanie": {
                     "type": "string",
-                    "description": "Słowa kluczowe do wyszukania (temat, autor, tytuł).",
+                    "description": (
+                        "Słowa kluczowe do wyszukania, np. 'psychologia "
+                        "pozytywna' albo 'wypalenie zawodowe'."
+                    ),
                 }
             },
             "required": ["zapytanie"],
@@ -75,97 +93,95 @@ _TOOLS = [
 ]
 
 
-def _build_system_prompt() -> list[dict]:
-    """Instrukcje + główna baza wiedzy jako stabilny, buforowany blok promptu.
+def _build_system():
+    """Buduje prompt systemowy: charakter bota + cała baza wiedzy.
 
-    Treść jest identyczna bajt po bajcie między zapytaniami, dzięki czemu
-    prefiks może być buforowany (prompt caching). Wiedza szczegółowa nie jest
-    tu wstawiana — model doczytuje ją na żądanie narzędziem wyszukiwania.
+    Stałą część oznaczamy jako "buforowalną" (prompt caching), żeby kolejne
+    pytania były tańsze i szybsze.
     """
-    text = _INSTRUCTIONS
-    if MAIN_KNOWLEDGE:
-        text += f"\n\n# Baza wiedzy\n\n{MAIN_KNOWLEDGE}"
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+    knowledge = load_general_knowledge()
+    text = _INSTRUCTIONS_BASE
+    if knowledge:
+        text += "\n\n# Baza wiedzy\n\n" + knowledge
+    return [
+        {
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
 
-SYSTEM_PROMPT = _build_system_prompt()
+def _sanitize_history(history):
+    """Zamienia historię z frontendu na poprawną listę wiadomości.
 
-# Jeden współdzielony klient dla wszystkich zapytań. Czyta ANTHROPIC_API_KEY ze środowiska.
-_client = anthropic.Anthropic()
-
-
-def generate_reply(message: str, history: list[dict] | None = None) -> str:
-    """Wysyła rozmowę do Claude i zwraca tekst odpowiedzi asystenta.
-
-    Obsługuje pętlę wywołań narzędzia: jeśli model poprosi o wyszukanie w
-    repozytorium, wykonujemy je i zwracamy wynik, aż model udzieli ostatecznej
-    odpowiedzi. Gdy RAG jest wyłączony (RAG_ENABLED=False), pomijamy narzędzie
-    i wykonujemy zwykłe pojedyncze zapytanie. `history` to opcjonalna lista
-    wcześniejszych tur jako słowniki {"role", "content"} (role "user" / "assistant").
+    Anthropic wymaga, by rozmowa zaczynała się od roli 'user' i by role
+    się przeplatały. Odrzucamy więc ewentualne wiadomości powitalne bota
+    z początku oraz puste/niepoprawne wpisy.
     """
-    messages = _build_messages(message, history)
+    czyste = []
+    for turn in history or []:
+        if not isinstance(turn, dict):
+            continue
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            czyste.append({"role": role, "content": content})
 
-    # RAG wyłączony — zwykły czat bez narzędzia wyszukiwania.
-    if not RAG_ENABLED:
-        response = _client.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT, messages=messages
-        )
-        return _text(response)
+    # Usuwamy wiodące wiadomości asystenta (np. powitanie).
+    while czyste and czyste[0]["role"] == "assistant":
+        czyste.pop(0)
+    return czyste
 
-    for _ in range(MAX_TOOL_ITERS):
-        response = _client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            tools=_TOOLS,
-        )
 
-        if response.stop_reason != "tool_use":
-            return _text(response)
+def get_reply(message: str, history=None) -> str:
+    """Zwraca odpowiedź bota na wiadomość użytkownika.
 
-        # Wykonaj żądane wyszukiwania i dołącz wyniki jako tool_result.
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "szukaj_w_repozytorium":
-                query = (block.input or {}).get("zapytanie", "")
+    message  – aktualne pytanie użytkownika
+    history  – wcześniejsze wiadomości [{role, content}, ...]
+    """
+    client = _get_client()
+    system = _build_system()
+
+    messages = _sanitize_history(history)
+    messages.append({"role": "user", "content": message})
+
+    # Pętla tool-use: powtarzamy, dopóki model prosi o użycie narzędzia.
+    while True:
+        kwargs = {
+            "model": MODEL,
+            "max_tokens": MAX_TOKENS,
+            "system": system,
+            "messages": messages,
+        }
+        if RAG_ENABLED:
+            kwargs["tools"] = _TOOLS
+
+        response = client.messages.create(**kwargs)
+
+        # Jeśli model chce użyć narzędzia — wykonujemy je i wracamy do pętli.
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                if block.name == "szukaj_w_repozytorium":
+                    zapytanie = (block.input or {}).get("zapytanie", "")
+                    wynik = search_as_text(zapytanie)
+                else:
+                    wynik = f"Nieznane narzędzie: {block.name}"
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": search_as_text(query),
+                        "content": wynik,
                     }
                 )
-        messages.append({"role": "user", "content": tool_results})
-
-    # Limit iteracji wyczerpany — wymuś odpowiedź końcową bez narzędzi.
-    final = _client.messages.create(
-        model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT, messages=messages
-    )
-    return _text(final)
-
-
-def _text(response) -> str:
-    """Skleja tekstowe bloki odpowiedzi w jeden ciąg."""
-    return "".join(block.text for block in response.content if block.type == "text")
-
-
-def _build_messages(message: str, history: list[dict] | None) -> list[dict]:
-    """Normalizuje historię do poprawnej tablicy wiadomości Anthropic.
-
-    Pomija wszystko, co nie jest turą user/assistant, oraz usuwa początkowe
-    tury asystenta (pierwsza wiadomość musi pochodzić od użytkownika).
-    """
-    messages: list[dict] = []
-    for turn in history or []:
-        role = turn.get("role")
-        content = turn.get("content")
-        if role not in ("user", "assistant") or not isinstance(content, str):
+            messages.append({"role": "user", "content": tool_results})
             continue
-        if not messages and role != "user":
-            continue  # pomiń początkowe tury asystenta (np. wstępne powitanie)
-        messages.append({"role": role, "content": content})
 
-    messages.append({"role": "user", "content": message})
-    return messages
+        # Odpowiedź końcowa: sklejamy bloki tekstowe.
+        teksty = [b.text for b in response.content if b.type == "text"]
+        return "\n".join(teksty).strip()

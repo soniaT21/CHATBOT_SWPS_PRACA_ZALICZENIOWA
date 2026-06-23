@@ -1,0 +1,1 @@
+"""Trasy (blueprinty) aplikacji Flask."""

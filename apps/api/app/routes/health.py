@@ -1,10 +1,9 @@
-"""Endpoint kontroli stanu (health check)."""
-
+"""Endpoint GET /health — szybkie sprawdzenie, czy backend żyje."""
 from flask import Blueprint, jsonify
 
 health_bp = Blueprint("health", __name__)
 
 
-@health_bp.get("/health")
+@health_bp.route("/health", methods=["GET"])
 def health():
-    return jsonify(status="ok")
+    return jsonify({"status": "ok"})

@@ -1,57 +1,49 @@
-"""Klient repozytorium naukowego SWPS (DSpace).
+"""Wyszukiwarka repozytorium SWPS (DSpace / SHARE).
 
-Udostępnia wyszukiwanie publikacji przez publiczne REST API DSpace
-(`/server/api/discover/search/objects`). Używane jako źródło wiedzy
-„na żądanie" — wywoływane przez model dopiero, gdy pytanie tego wymaga.
-Korzysta wyłącznie z biblioteki standardowej (bez dodatkowych zależności).
+UWAGA: To jest element wersji ROZSZERZONEJ (ocena 5 / RAG).
+W wersji podstawowej (ocena 4) plik nie jest używany, bo w .env
+mamy RAG_ENABLED=false i bot nie dostaje narzędzia do wyszukiwania.
+
+Interfejs, na którym opiera się reszta kodu, to funkcja
+``search_as_text(zapytanie)`` -> str. Jeśli kiedyś zechcesz podmienić
+źródło wiedzy (inne API, biblioteka, własny endpoint), wystarczy że
+zachowasz tę funkcję, a `claude.py` nie wymaga zmian.
 """
+import requests
 
-import json
-import urllib.parse
-import urllib.request
+_SEARCH_URL = "https://share.swps.edu.pl/server/api/discover/search/objects"
 
-SEARCH_URL = "https://share.swps.edu.pl/server/api/discover/search/objects"
-TIMEOUT = 20
-# Cloudflare przed repozytorium blokuje domyślny User-Agent urllib (403),
-# dlatego podajemy nagłówek przeglądarki.
+# Cloudflare potrafi blokować zapytania bez nagłówka przeglądarki (błąd 403),
+# dlatego podszywamy się pod zwykłą przeglądarkę.
 _HEADERS = {
-    "Accept": "application/json",
     "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     ),
+    "Accept": "application/json",
 }
 
 
-def _first(md: dict, *keys: str) -> str:
-    """Pierwsza niepusta wartość spośród podanych pól metadanych."""
-    for key in keys:
-        for entry in md.get(key, []):
-            value = (entry.get("value") or "").strip()
-            if value and value.lower() != "brak":
-                return value
-    return ""
+def search_as_text(zapytanie: str, limit: int = 3) -> str:
+    """Szuka publikacji w repozytorium SWPS i zwraca wynik jako tekst.
 
+    Zwracany tekst jest gotowy do wklejenia w odpowiedzi narzędzia dla
+    modelu (tytuł, autorzy, rok, link). Gdy nic nie znajdzie lub wystąpi
+    błąd sieci, zwraca czytelny komunikat.
+    """
+    zapytanie = (zapytanie or "").strip()
+    if not zapytanie:
+        return "Puste zapytanie — nie ma czego szukać."
 
-def _all(md: dict, *keys: str) -> list[str]:
-    """Wszystkie niepuste wartości spośród podanych pól metadanych."""
-    out: list[str] = []
-    for key in keys:
-        for entry in md.get(key, []):
-            value = (entry.get("value") or "").strip()
-            if value and value.lower() != "brak":
-                out.append(value)
-    return out
-
-
-def search(query: str, size: int = 5) -> list[dict]:
-    """Wyszukuje pozycje w repozytorium i zwraca uproszczone rekordy."""
-    params = urllib.parse.urlencode(
-        {"query": query, "size": size, "dsoType": "item"}
-    )
-    request = urllib.request.Request(f"{SEARCH_URL}?{params}", headers=_HEADERS)
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        data = json.load(response)
+    params = {"query": zapytanie, "size": limit}
+    try:
+        resp = requests.get(_SEARCH_URL, params=params, headers=_HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        return f"Nie udało się połączyć z repozytorium SWPS: {exc}"
+    except ValueError:
+        return "Repozytorium zwróciło odpowiedź w nieoczekiwanym formacie."
 
     objects = (
         data.get("_embedded", {})
@@ -59,50 +51,27 @@ def search(query: str, size: int = 5) -> list[dict]:
         .get("_embedded", {})
         .get("objects", [])
     )
+    if not objects:
+        return f"Brak wyników w repozytorium SWPS dla zapytania: {zapytanie}"
 
-    results = []
-    for obj in objects:
+    wpisy = []
+    for obj in objects[:limit]:
         item = obj.get("_embedded", {}).get("indexableObject", {})
-        md = item.get("metadata", {})
-        handle = item.get("handle")
-        results.append(
-            {
-                "title": _first(md, "dc.title") or item.get("name", ""),
-                "authors": _all(md, "dc.contributor.author", "dc.contributor.editor"),
-                "year": _first(md, "dc.date.issued")[:4],
-                "abstract": _first(
-                    md, "dc.abstract.pl", "dc.description.abstract", "dc.abstract.en"
-                ),
-                "subjects": _all(md, "dc.subject.pl", "dc.subject.en"),
-                "url": _first(md, "dc.identifier.uri")
-                or (f"https://share.swps.edu.pl/handle/{handle}" if handle else ""),
-            }
-        )
-    return results
+        meta = item.get("metadata", {})
 
+        def _pierwsza(klucz: str) -> str:
+            wartosci = meta.get(klucz, [])
+            return wartosci[0].get("value", "") if wartosci else ""
 
-def search_as_text(query: str, size: int = 5) -> str:
-    """Wyszukuje i formatuje wyniki jako tekst do przekazania modelowi."""
-    try:
-        results = search(query, size)
-    except Exception as exc:  # sieć/parsowanie — nie wywracamy całego czatu
-        return f"(Błąd wyszukiwania w repozytorium SWPS: {exc})"
+        tytul = _pierwsza("dc.title") or "(bez tytułu)"
+        autor = _pierwsza("dc.contributor.author") or "(brak autora)"
+        rok = _pierwsza("dc.date.issued")
+        uuid = item.get("uuid", "")
+        link = f"https://share.swps.edu.pl/items/{uuid}" if uuid else ""
 
-    if not results:
-        return f"(Brak wyników w repozytorium SWPS dla zapytania: „{query}”.)"
+        wiersz = f"- {tytul} ({rok}), {autor}"
+        if link:
+            wiersz += f" — {link}"
+        wpisy.append(wiersz)
 
-    blocks = []
-    for i, r in enumerate(results, 1):
-        parts = [f"{i}. {r['title']}"]
-        if r["authors"]:
-            parts.append("Autorzy/redakcja: " + ", ".join(r["authors"][:6]))
-        if r["year"]:
-            parts.append("Rok: " + r["year"])
-        if r["subjects"]:
-            parts.append("Słowa kluczowe: " + ", ".join(r["subjects"][:8]))
-        if r["abstract"]:
-            parts.append("Abstrakt: " + r["abstract"][:600])
-        if r["url"]:
-            parts.append("Link: " + r["url"])
-        blocks.append("\n".join(parts))
-    return "\n\n".join(blocks)
+    return "Znalezione publikacje w repozytorium SWPS:\n" + "\n".join(wpisy)

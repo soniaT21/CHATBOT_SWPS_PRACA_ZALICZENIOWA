@@ -1,21 +1,25 @@
-"""Wczytuje główny plik wiedzy (general.md) jako stały kontekst chatbota.
+"""Wczytywanie stałej bazy wiedzy (knowledge/general.md).
 
-Wiedza szczegółowa nie jest trzymana lokalnie ani ładowana w całości —
-jest doczytywana na żądanie z repozytorium naukowego SWPS (DSpace) przez
-narzędzie wyszukiwania (patrz app/repository.py).
+Treść tego pliku jest dołączana do promptu systemowego przy KAŻDYM
+pytaniu. To jest serce wersji podstawowej (ocena 4): bot "zna na pamięć"
+to, co tu wpiszesz.
 """
+import os
+from functools import lru_cache
 
-from pathlib import Path
-
-KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
-MAIN_FILE = "general.md"
-
-
-def _load_main() -> str:
-    path = KNOWLEDGE_DIR / MAIN_FILE
-    return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+# Katalog .../apps/api/knowledge
+_KNOWLEDGE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "knowledge",
+)
 
 
-# Wczytywane raz przy imporcie. Treść jest stała, więc pozostaje
-# buforowalna w prompt cache.
-MAIN_KNOWLEDGE = _load_main()
+@lru_cache(maxsize=1)
+def load_general_knowledge() -> str:
+    """Zwraca zawartość general.md jako tekst. Wynik jest cache'owany."""
+    path = os.path.join(_KNOWLEDGE_DIR, "general.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""

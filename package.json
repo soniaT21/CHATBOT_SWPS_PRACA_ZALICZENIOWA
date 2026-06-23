@@ -1,24 +1,16 @@
 {
-  "name": "CHATBOT_SWPS",
+  "name": "chatbot-swps",
+  "version": "1.0.0",
   "private": true,
+  "packageManager": "yarn@4.3.1",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "build": "turbo run build",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo run check-types"
+    "build": "turbo run build"
   },
   "devDependencies": {
-    "prettier": "^3.7.4",
-    "turbo": "^2.9.16",
-    "typescript": "5.9.2"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "packageManager": "yarn@4.15.0",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
+    "turbo": "^2.0.6"
+  }
 }
